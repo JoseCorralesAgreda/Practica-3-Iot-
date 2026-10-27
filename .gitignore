@@ -1,0 +1,20 @@
+# PlatformIO
+smart-object/.pio/
+smart-object/.vscode/
+smart-object/include/config.h
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# Local configuration
+.env
+.env.*
+!.env.example
+mcp-server/config/claude_desktop_config.json
