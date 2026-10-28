@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "sis234-grupo2": {
+      "command": "C:/path/to/project/mcp-server/.venv/Scripts/python.exe",
+      "args": ["C:/path/to/project/mcp-server/server.py"]
+    }
+  }
+}
