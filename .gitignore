@@ -1,12 +1,18 @@
 # PlatformIO
-smart-object/.pio/
-smart-object/.vscode/
-smart-object/include/config.h
+.pio/
+.vscode/
+.idea/
+*.code-workspace
+secrets.h
+# Keep legacy local configuration private during migration.
+config.h
 
 # Python
 __pycache__/
 *.py[cod]
 .venv/
+venv/
+env/
 *.egg-info/
 build/
 dist/
@@ -16,5 +22,4 @@ dist/
 # Local configuration
 .env
 .env.*
-!.env.example
-mcp-server/config/claude_desktop_config.json
+claude_desktop_config.json
