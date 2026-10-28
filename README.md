@@ -2,7 +2,7 @@
 
 SIS-234: ESP32 DOIT DevKit V1, HC-SR04 y tres LEDs, integrados con IoT MQTT Panel y Claude Desktop mediante MQTT y MCP. [Especificación](Práctica_MQTT.md).
 
-**Estado:** estructura preparada; firmware de diagnóstico y servidor MCP mínimo. Sensor, LEDs y MQTT todavía no están implementados. Integrantes: pendiente registrar los tres nombres.
+**Estado:** Parte 1 del firmware implementada (HC-SR04 y LEDs, prueba serial independiente); pendiente de verificación física. MQTT y las herramientas funcionales MCP todavía no están implementados. Integrantes: pendiente registrar los tres nombres.
 
 ## Organización
 
@@ -10,7 +10,7 @@ SIS-234: ESP32 DOIT DevKit V1, HC-SR04 y tres LEDs, integrados con IoT MQTT Pane
 - `mcp-server/`: servidor Python y prueba de integración MCP.
 - `config/`: ejemplo de configuración de Claude Desktop; aquí se incorporará la exportación real del panel.
 - [Plan general](docs/plans/01-general-plan.md): aprobado por el usuario; se conserva como archivo histórico.
-- [Plan del firmware](docs/plans/02-firmware-plan.md): diseño de hardware y MQTT, pendiente de aprobación y confirmación de pines.
+- [Plan del firmware](docs/plans/02-firmware-plan.md): Parte 1 implementada por solicitud del usuario, con resistencias de 220 Ω; Parte 2 pendiente. El plan se conserva como archivo histórico.
 - [Plan del servidor MCP](docs/plans/03-mcp-server-plan.md): herramientas, datos recientes, conexión y pruebas; pendiente de aprobación.
 - [Firmware](docs/firmware.md) y [servidor MCP](docs/mcp-server.md): funcionamiento actual.
 
@@ -42,15 +42,19 @@ Se adopta la decisión explícita de 1000 ms de AGENTS.md §3.2 frente a los 200
 
 ## Ejecutar la base actual
 
-Desde la raíz, con PlatformIO instalado:
+Para compilar y cargar la prueba de la Parte 1, desde la raíz con PlatformIO instalado:
 
 ```powershell
-pio run --project-dir firmware
-pio run --project-dir firmware --target upload --upload-port COM3
+pio run --project-dir firmware -e hardware-check
+pio run --project-dir firmware -e hardware-check --target upload --upload-port COM3
 pio device monitor --port COM3 --baud 115200
 ```
 
-Cambiar `COM3` por el puerto real. La carga reemplaza el firmware de la placa. La base solo imprime mensajes de diagnóstico por serial.
+Cambiar `COM3` por el puerto real. La carga reemplaza el firmware de la placa. Conectar TRIG a GPIO18, ECHO a GPIO19 y los LEDs rojo/amarillo/verde a GPIO25/26/27, cada uno con una resistencia en serie de **220 Ω**. HC-SR04 a 5 V y GND común; ver [montaje y funcionamiento](docs/firmware.md).
+
+El monitor muestra distancias válidas y un mensaje de actividad por segundo. Enviar `r/R`, `y/Y` o `g/G` para encender/apagar el LED correspondiente (minúscula enciende, mayúscula apaga). No necesita `secrets.h`, WiFi ni MQTT. Este control serial es solo una prueba local del hardware.
+
+El entorno predeterminado `esp32doit-devkit-v1` conserva el diagnóstico inicial de `main.cpp`; para probar sensor y LEDs hay que seleccionar explícitamente `-e hardware-check`. La integración final con MQTT corresponde a la Parte 2.
 
 Con Python ≥3.11:
 
