@@ -3,6 +3,7 @@
 import asyncio
 import json
 import sys
+from pathlib import Path
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -10,7 +11,8 @@ from mcp.client.stdio import stdio_client
 
 async def check_server() -> None:
     parameters = StdioServerParameters(
-        command=sys.executable, args=["-m", "mqtt_mcp_server"]
+        command=sys.executable,
+        args=[str(Path(__file__).resolve().parents[1] / "server.py")],
     )
     async with stdio_client(parameters) as (read, write):
         async with ClientSession(read, write) as session:
