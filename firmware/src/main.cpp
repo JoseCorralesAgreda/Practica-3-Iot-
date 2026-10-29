@@ -23,9 +23,11 @@ MqttClient mqttClient(readDistance, applyLed);
 /** Initialize hardware before starting connectivity. */
 void setup() {
     Serial.begin(kSerialBaudRate);
+    Serial.println("Smart object starting");
     ledController.begin();
     distanceSensor.begin();
     mqttClient.begin();
+    Serial.println("Smart object setup complete");
 }
 
 /** Advance the sensor and pending commands without network waits. */

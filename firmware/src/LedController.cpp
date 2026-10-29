@@ -17,10 +17,12 @@ void LedController::begin() {
     pinMode(kRedLedPin, OUTPUT);
     pinMode(kYellowLedPin, OUTPUT);
     pinMode(kGreenLedPin, OUTPUT);
+    Serial.println("LED controller ready: red=off, yellow=off, green=off");
 }
 
 bool LedController::setLed(const char* color, bool enabled) {
     if (color == nullptr) {
+        Serial.println("LED command rejected: null color");
         return false;
     }
 
@@ -32,9 +34,11 @@ bool LedController::setLed(const char* color, bool enabled) {
     } else if (std::strcmp(color, "green") == 0) {
         pin = kGreenLedPin;
     } else {
+        Serial.printf("LED command rejected: unknown color '%s'\n", color);
         return false;
     }
 
     digitalWrite(pin, enabled ? HIGH : LOW);
+    Serial.printf("LED state changed: %s=%s\n", color, enabled ? "on" : "off");
     return true;
 }
