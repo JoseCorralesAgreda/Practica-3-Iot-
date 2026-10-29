@@ -2,7 +2,7 @@
 
 SIS-234: ESP32 DOIT DevKit V1, HC-SR04 y tres LEDs, integrados con IoT MQTT Panel y Claude Desktop mediante MQTT y MCP. [Especificación](Práctica_MQTT.md).
 
-**Estado:** Ambas partes del firmware implementadas e integradas (HC-SR04, LEDs, WiFi y MQTT), con compilación de los tres entornos y 45 comprobaciones lógicas aprobadas en PC. Pendiente de verificación física y de red en ESP32. Las herramientas funcionales MCP todavía no están implementadas. Integrantes: pendiente registrar los tres nombres.
+**Estado:** Firmware y servidor MCP implementados. Los tres entornos del firmware compilan; las 45 comprobaciones del firmware y 23 pruebas unitarias MCP pasan en PC. Paho también intercambió una muestra y una orden QoS 1 con un cliente testigo en tópicos temporales de HiveMQ. Falta verificar el ESP32 y probarlo desde Claude Desktop. Integrantes: pendiente registrar los tres nombres.
 
 ## Organización
 
@@ -11,7 +11,7 @@ SIS-234: ESP32 DOIT DevKit V1, HC-SR04 y tres LEDs, integrados con IoT MQTT Pane
 - `config/`: ejemplo de configuración de Claude Desktop; aquí se incorporará la exportación real del panel.
 - [Plan general](docs/plans/01-general-plan.md): aprobado por el usuario; se conserva como archivo histórico.
 - [Plan del firmware](docs/plans/02-firmware-plan.md): ambas partes implementadas, con resistencias de 220 Ω y cambio aprobado a ESP-MQTT. El plan se conserva como archivo histórico; las adaptaciones están en la documentación del firmware.
-- [Plan del servidor MCP](docs/plans/03-mcp-server-plan.md): herramientas, datos recientes, conexión y pruebas; pendiente de aprobación.
+- [Plan del servidor MCP](docs/plans/03-mcp-server-plan.md): aprobado e implementado; se conserva como plan archivado.
 - [Firmware](docs/firmware.md) y [servidor MCP](docs/mcp-server.md): funcionamiento actual.
 
 ## Contrato aprobado
@@ -25,7 +25,7 @@ Broker: `broker.hivemq.com:1883`, sin TLS ni autenticación. Todo acceso al obje
 
 Colores: `red`, `yellow`, `green`; estados: `on`, `off`. Distancia con QoS 0 y comandos con QoS 1, ambos sin retención; identificadores únicos por cliente. El firmware implementa este contrato; cada comando cambia solo el LED indicado.
 
-Herramienta actual: `get_status()`, informa disponibilidad del servidor y conexiones aún no implementadas. Herramientas previstas: `get_distance()` (última lectura y antigüedad) y `set_led(led, state)` (publicar un comando validado).
+Herramientas MCP: `get_distance()` devuelve la última lectura y su antigüedad; `set_led(led, state)` publica un comando explícito para un LED. La confirmación MQTT no confirma el estado físico del LED. Ver [servidor MCP](docs/mcp-server.md).
 
 ## Valores declarados para la demo
 
@@ -66,17 +66,18 @@ El monitor muestra distancias válidas y un mensaje de actividad por segundo. En
 
 Para probar únicamente MQTT, usar `-e mqtt-check` en los comandos de compilación y carga. Ejecuta las comprobaciones internas antes de conectar; después publica 42.7 cm cada segundo y muestra los comandos recibidos por Serial sin tocar GPIO. El entorno predeterminado `esp32doit-devkit-v1` ejecuta el sistema integrado.
 
-## Ejecutar la base MCP
+## Ejecutar el servidor MCP
 
 Con Python ≥3.11:
 
 ```powershell
 python -m venv mcp-server/.venv
 ./mcp-server/.venv/Scripts/python.exe -m pip install -r mcp-server/requirements.txt
+./mcp-server/.venv/Scripts/python.exe -m unittest discover -s mcp-server/tests -p "test_*.py"
 ./mcp-server/.venv/Scripts/python.exe mcp-server/tests/smoke_test.py
 ./mcp-server/.venv/Scripts/python.exe mcp-server/server.py
 ```
 
-El servidor espera un cliente MCP por stdio. Para Claude Desktop, adaptar las rutas absolutas de [la plantilla](config/claude_desktop_config.example.json) a la instalación local y añadir su entrada a la configuración existente. Reiniciar Claude Desktop; actualmente solo aparecerá `get_status`.
+El servidor se conecta al broker en segundo plano y espera un cliente MCP por stdio. Para Claude Desktop, combinar las rutas absolutas de [la plantilla](config/claude_desktop_config.example.json) con `mcpServers` en la configuración local y reiniciar Claude Desktop. La IA puede consultar la distancia o solicitar `set_led`; para «Enciende el LED rojo y apaga los demás» debe hacer tres llamadas secuenciales. Si un resultado es `unknown`, la entrega es incierta y no debe reintentar automáticamente.
 
 Configuración prevista de IoT MQTT Panel: conexión al broker, identificador único, gauge con tópico de distancia y JSONPath `$.cm`, y seis botones (encender/apagar cada color) que publiquen los JSON propuestos. Exportar el panel real a `config/iot-mqtt-panel.json` si la versión instalada lo permite. El [fabricante](https://snrlab.in/iot/) documenta JSONPath y su [ficha oficial](https://play.google.com/store/apps/details?id=snr.lab.iotmqttpanel.prod) anuncia publicación JSON y exportación; falta verificarlo en el teléfono.

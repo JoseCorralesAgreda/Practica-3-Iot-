@@ -1,8 +1,8 @@
 # Plan del servidor MCP — Grupo 2
 
-Fecha: 27 de octubre de 2026. Estado: pendiente de aprobación; documento de diseño, sin implementación funcional. Una vez ejecutado, se archiva sin modificaciones.
+Fecha de revisión: 28 de octubre de 2026. Estado: plan detallado listo para aprobación; sin implementación funcional del MCP. Este borrador todavía no se ha ejecutado. Una vez ejecutado, se archiva sin modificaciones.
 
-Se desarrolla el [plan general aprobado](01-general-plan.md) conforme a [AGENTS.md](../../AGENTS.md) y la [especificación](../../Práctica_MQTT.md). El montaje del [plan del firmware](02-firmware-plan.md) utiliza una resistencia de **220 Ω por LED**, según la corrección del usuario; ese valor no requiere cambios de software en MCP.
+Se desarrolla el [plan general aprobado](01-general-plan.md) conforme a [AGENTS.md](../../AGENTS.md) y la [especificación](../../Práctica_MQTT.md). Las dos partes del firmware ya están implementadas; el cambio aprobado a ESP-MQTT conserva los tópicos y mensajes de este plan. Se mantiene una publicación válida cada 1000 ms y una resistencia de **220 Ω por LED**. MCP no necesita conocer esa biblioteca ni el montaje físico.
 
 ## 1. Alcance y arquitectura
 
@@ -32,7 +32,7 @@ flowchart LR
 
 Responsable: integrante 3. No modifica archivos del firmware ni desarrolla código de la app móvil. El archivo de pruebas adicional verifica errores de red y datos, no constituye una capa de producción.
 
-Python ≥3.11. Dependencias previstas: `mcp==1.30.0` y `paho-mqtt==2.1.0`. La versión MCP 1.30.0 está instalada en el entorno local y su API FastMCP se inspeccionó al elaborar este plan. Mantener la línea 1.x evita migrar la base existente; no instalar una versión mayor de manera implícita. Usar `unittest`, `json`, `threading`, `queue`, `time`, `uuid`, `logging` y `asyncio` de la biblioteca estándar; sin pytest ni frameworks adicionales.
+Python ≥3.11. Dependencias previstas: `mcp==1.30.0` y `paho-mqtt==2.1.0`. Actualmente `requirements.txt` declara `mcp>=1.12,<2` y no existe `mcp-server/.venv`; la instalación conjunta de las versiones fijadas se verificará al implementar. Mantener la línea 1.x evita migrar la base existente; no instalar una versión mayor de manera implícita. Usar `unittest`, `json`, `threading`, `dataclasses`, `time`, `uuid`, `logging` y `asyncio` de la biblioteca estándar; sin pytest ni frameworks adicionales.
 
 No se crean `.env`, secretos del broker ni archivos de configuración propios. Host, tópicos y límites son constantes en `mqtt_client.py`.
 
@@ -44,6 +44,8 @@ No se crean `.env`, secretos del broker ni archivos de configuración propios. H
 | Publicar comando | `sis234/grupo2/leds/cmd` | `{"led":"red","state":"on"}` | 1 | false |
 
 Colores exactos: `red`, `yellow`, `green`. Estados exactos: `on`, `off`. Cada comando modifica un LED; no añade campos ni apaga automáticamente los demás. La orden «Enciende el LED rojo y apaga los demás» requiere tres llamadas independientes.
+
+Claude ejecutará esa instrucción secuencialmente: `set_led("red", "on")`, `set_led("yellow", "off")` y `set_led("green", "off")`, esperando el resultado de cada llamada. No es una transacción atómica. Ante `unknown`, detener la secuencia e informar qué operaciones quedaron confirmadas por el broker y cuál es incierta; no repetir automáticamente la orden. La consulta de distancia se resuelve con una sola llamada a `get_distance`.
 
 MQTT 3.1.1, `clean_session=True`, `CallbackAPIVersion.VERSION2`. Identificador `sis234/grupo2/mcp/<uuid4>` por proceso; solo un cliente activo por proceso. Tras cada reconexión, suscribir nuevamente distancia y esperar SUBACK antes de declarar listo el cliente.
 
@@ -104,6 +106,8 @@ Ante `unknown`: `Delivery is uncertain. The command may have reached the device;
 
 La llamada completa espera como máximo 3 s desde su aceptación local. No bloquea el event loop MCP: el resultado se espera mediante `asyncio.to_thread` sobre un `threading.Event` con timeout acotado. `get_distance` puede responder mientras hay un comando pendiente.
 
+El plazo se fija una sola vez con reloj monotónico al admitir la orden. La espera usa el tiempo restante, sin sumar otros 3 s después de preparar o enviar el mensaje. El timeout de espera y el callback PUBACK compiten por completar el mismo resultado bajo el lock; gana la primera transición terminal. Los 3 s limitan la espera interna por entrega, no el tiempo de razonamiento de Claude ni la ejecución física del LED.
+
 Las condiciones de red se devuelven como estados del resultado; una validación rechazada o fallo interno inesperado produce error MCP. Ningún fallo se disfraza de `published`.
 
 ## 5. Cliente MQTT y estado compartido
@@ -118,6 +122,8 @@ Clase única de componente: `MqttClient`. API pública:
 | `async set_led(led: str, state: str) -> dict[str, str | bool]` | Validar, admitir una orden y esperar su resultado acotado |
 
 Métodos privados: `_run`, `_create_client`, `_on_connect`, `_on_subscribe`, `_on_disconnect`, `_on_message`, `_on_publish`, `_process_command`, `_invalidate_connection` y `_parse_distance`.
+
+Firmas de callbacks Paho API v2: `_on_connect(client, userdata, flags, reason_code, properties)`, `_on_subscribe(client, userdata, mid, reason_code_list, properties)`, `_on_disconnect(client, userdata, disconnect_flags, reason_code, properties)`, `_on_message(client, userdata, message)` y `_on_publish(client, userdata, mid, reason_code, properties)`. Comparar el cliente recibido con la instancia vigente antes de modificar estado. `start()` y `stop()` serán idempotentes; `stop()` marca cierre antes de esperar al hilo, de modo que ya no puedan admitirse nuevas órdenes.
 
 El cliente mantiene la última distancia, instante de recepción, estado de conexión/suscripción, identificador de sesión y como máximo una orden pendiente. La orden se representa con una pequeña `dataclass` privada `_PendingCommand` dentro del mismo módulo: color, estado, plazo monotónico, generación, indicador de envío, resultado y evento de finalización. Representa datos de una operación, no otra capa de servicio.
 
@@ -156,12 +162,14 @@ Se usa un solo hilo trabajador daemon para las operaciones MQTT. El hilo ejecuta
 
 Flujo de `_run`:
 
-1. Crear Paho con reconexión automática desactivada y timeout de conexión de 5 s. Intentar `connect` en el trabajador, nunca en el hilo del servidor MCP. Los intentos se espacian al menos 5 s usando `stop_event.wait`, que permite despertar al cerrar.
-2. Atender la red y los plazos de CONNACK/SUBACK. Al recibir conexión aceptada, suscribir distancia con QoS 0; al recibir SUBACK correspondiente, habilitar herramientas. Un rechazo o plazo vencido retira esa instancia.
+1. Crear Paho con `reconnect_on_failure=False` y establecer `client.connect_timeout = 5.0` antes de conectar. Intentar `connect` en el trabajador, nunca en el hilo del servidor MCP. Los intentos se espacian al menos 5 s usando `stop_event.wait`, que permite despertar al cerrar.
+2. Atender la red y los plazos de CONNACK/SUBACK. Al recibir conexión aceptada, suscribir distancia con QoS 0; comprobar el resultado local de `subscribe`, guardar su `mid` y habilitar herramientas solo si el SUBACK corresponde y concede QoS 0 al único tópico solicitado. Un rechazo o plazo vencido retira esa instancia.
 3. Procesar la orden pendiente únicamente si sigue vigente, la sesión coincide y el cliente está listo. Generar JSON con `json.dumps`, publicar QoS 1 y `retain=False`; registrar el identificador antes de volver a procesar la red. No llamar `wait_for_publish()` dentro del trabajador, porque este mismo hilo debe atender PUBACK.
 4. `_on_publish` completa exclusivamente la orden correspondiente a ese cliente, generación e identificador. El resultado terminal se establece una sola vez; un PUBACK tardío no modifica una respuesta ya emitida.
 5. Si hay desconexión, error de red o timeout de una publicación enviada, invalidar la sesión, borrar caché y resolver pendiente como `unknown` si se intentó enviar, o `not_sent` si no se envió. Retirar y desechar la instancia Paho; crear una nueva en el próximo intento. No acceder a colecciones privadas de Paho para borrar mensajes.
 6. Si el plazo vence mientras la orden aún no fue enviada, cancelarla antes de publicar. Una cancelación de la llamada MCP aplica la misma regla; si ya fue enviada, retirar la sesión e informar por log que la entrega fue incierta.
+
+Antes de entrar en `publish`, el trabajador comprueba plazo, generación y cancelación bajo el lock y marca el intento de envío. Después libera el lock y llama a Paho. Si el plazo vence desde ese punto, el resultado será conservadoramente `unknown`, incluso si el trabajador todavía no sabe cuántos bytes salieron. Un retorno local fallido después del intento tampoco prueba por sí solo que el broker no recibió nada. Marcar inmediatamente la sesión como no disponible cuando se resuelve una entrega incierta; no admitir otra orden hasta que el trabajador retire esa instancia y complete una conexión nueva.
 
 La sesión limpia por sí sola no elimina la cola local de salida de Paho. La [documentación del cliente](https://eclipse.dev/paho/files/paho.mqtt.python/html/client.html) indica que reconectar puede reenviar mensajes propios; sus [limitaciones conocidas](https://eclipse.dev/paho/files/paho.mqtt.python/html/index.html#known-limitations) también describen esa retransmisión con QoS >0. Por ello se descarta la instancia tras una interrupción, en lugar de reutilizarla con comandos pendientes. Aun así, un mensaje que alcanzó el broker puede haberse ejecutado y no es cancelable retroactivamente.
 
@@ -214,9 +222,15 @@ La configuración actual ya tiene esas rutas genéricas; solo se cambia si la im
 | Orden expirada antes del envío | `not_sent`, ninguna publicación posterior |
 | Dos órdenes concurrentes | Una admitida y otra `busy`; lectura de distancia sigue respondiendo |
 | Reconexión después de publicación incierta | Cliente nuevo, sin reenvío local automático de la orden anterior |
+| PUBACK al vencer el plazo y PUBACK tardío | Un solo resultado terminal; ninguna respuesta incierta cambia después a éxito |
+| Cancelación MCP antes/después de intentar enviar | No enviar la primera; invalidar sesión y conservar incertidumbre en la segunda |
+| SUBACK rechazado, ajeno o sin respuesta | No habilitar herramientas; retirar cliente y reintentar sin bloquear MCP |
+| Lectura concurrente con envío y doble llamada a start/stop | Instantánea coherente, un solo trabajador y cierre idempotente |
 | Cierre sin red | Salida acotada y sin hilos no-daemon reteniendo el proceso |
 
 Actualizar `smoke_test.py` para comprobar inicialización, descubrimiento de exactamente `get_distance` y `set_led`, esquema de enums, lectura con estructura válida y rechazo de argumentos inválidos. Mantener timeout global de 30 s y lanzamiento de `server.py` por ruta absoluta. La prueba básica no envía comandos válidos a un dispositivo real.
+
+Comprobar que `ctx` no aparece en el esquema de entrada y que `get_distance` no requiere parámetros. El lanzamiento real puede intentar conectar al broker por el ciclo de vida del servidor: esta prueba verifica el protocolo stdio y no se describirá como una prueba sin acceso a red. Para comprobar arranque con broker caído, ejecutar el mismo proceso con el acceso MQTT interrumpido; debe inicializar y responder `disconnected`. Capturar stderr por separado y comprobar que stdout contiene únicamente mensajes MCP válidos.
 
 Integración real, separada de los tests locales: con firmware conectado, confirmar recepción de muestras, apagar el sensor para observar caducidad, cortar acceso MQTT y restaurarlo. Ejecutar en Claude Desktop las dos frases del plan general. Verificar visualmente rojo encendido y los otros apagados; el resultado MCP por sí solo no demuestra el estado de los LEDs. Registrar los tres resultados si la orden compuesta falla parcialmente.
 
@@ -235,4 +249,4 @@ La integración utilizará el broker aprobado y configuraciones reales; no usar 
 
 No crear commits ni hacer push sin petición explícita. No modificar autorías. Si una dependencia impide respetar timeouts, limpieza de pendientes o protocolo stdio, documentar el impedimento y consultar antes de rediseñar.
 
-Referencias: [SDK oficial MCP, línea 1.x](https://github.com/modelcontextprotocol/python-sdk/tree/v1.x), [API de Paho](https://eclipse.dev/paho/files/paho.mqtt.python/html/client.html) y [limitaciones conocidas de Paho](https://eclipse.dev/paho/files/paho.mqtt.python/html/index.html#known-limitations). La inspección local confirmó el soporte de FastMCP para `lifespan`; los casos anteriores deberán verificar el comportamiento de la implementación conjunta.
+Referencias consultadas: [SDK oficial MCP, línea 1.x](https://github.com/modelcontextprotocol/python-sdk/tree/v1.x), [documentación de esa línea](https://py.sdk.modelcontextprotocol.io/v1/), [transporte stdio](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports), [API de Paho](https://eclipse.dev/paho/files/paho.mqtt.python/html/client.html) y [limitaciones conocidas de Paho](https://eclipse.dev/paho/files/paho.mqtt.python/html/index.html#known-limitations). La revisión comprobó el contrato contra el firmware y las APIs documentadas; no instaló dependencias ni ejecutó pruebas del futuro servidor. Los casos anteriores deberán verificar el comportamiento de la implementación conjunta.

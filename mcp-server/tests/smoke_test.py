@@ -18,17 +18,35 @@ async def check_server() -> None:
         async with ClientSession(read, write) as session:
             await session.initialize()
             tools = await session.list_tools()
-            assert "get_status" in {tool.name for tool in tools.tools}
-            result = await session.call_tool("get_status", {})
+            by_name = {tool.name: tool for tool in tools.tools}
+            assert set(by_name) == {"get_distance", "set_led"}
+            distance_schema = by_name["get_distance"].inputSchema
+            assert not distance_schema.get("properties")
+            assert not distance_schema.get("required")
+            led_schema = by_name["set_led"].inputSchema
+            assert set(led_schema["properties"]) == {"led", "state"}
+            assert set(led_schema["required"]) == {"led", "state"}
+            assert led_schema["properties"]["led"]["enum"] == ["red", "yellow", "green"]
+            assert led_schema["properties"]["state"]["enum"] == ["on", "off"]
+            result = await session.call_tool("get_distance", {})
             assert not result.isError, result
             payload = json.loads(result.content[0].text)
-            assert payload == {
-                "status": "ok",
-                "service": "mqtt-mcp-server",
-                "mqtt_connected": False,
-                "hardware_connected": False,
-            }, payload
-            print("PASS: MCP initialization, tool discovery, and get_status")
+            assert set(payload) == {"status", "cm", "age_seconds", "mqtt_connected", "message"}
+            assert payload["status"] in {"ok", "stale", "no_data", "disconnected"}
+            if payload["status"] in {"ok", "stale"}:
+                assert 5 <= payload["cm"] <= 200
+                assert payload["age_seconds"] >= 0
+            else:
+                assert payload["cm"] is None and payload["age_seconds"] is None
+            for arguments in (
+                {"led": "blue", "state": "on"},
+                {"led": "red", "state": "ON"},
+                {"led": "red", "state": True},
+                {"led": "red"},
+            ):
+                rejected = await session.call_tool("set_led", arguments)
+                assert rejected.isError, rejected
+            print("PASS: MCP initialization, tool schemas, distance and invalid arguments")
             print(json.dumps(payload))
 
 
