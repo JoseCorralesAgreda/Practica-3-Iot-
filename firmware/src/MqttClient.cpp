@@ -39,6 +39,7 @@ void MqttClient::begin() {
         return;
     }
     initialized_ = true;
+    Serial.println("MQTT client initializing");
     commandQueue_ = xQueueCreateStatic(kCommandQueueLength, sizeof(Command),
                                       commandQueueStorage_, &commandQueueControl_);
     readingQueue_ = xQueueCreateStatic(1, sizeof(Reading), readingQueueStorage_,
@@ -84,6 +85,8 @@ void MqttClient::runNetwork() {
         Serial.println("MQTT client allocation failed");
         return;
     }
+    Serial.printf("MQTT client configured: broker=%s:%u client_id=%s\n",
+                  kBrokerHost, kBrokerPort, clientId_);
     if (esp_mqtt_client_register_event(client_, MQTT_EVENT_ANY, onEvent, this) != ESP_OK) {
         Serial.println("MQTT event registration failed");
         esp_mqtt_client_destroy(client_);
@@ -135,6 +138,7 @@ void MqttClient::updateConnections() {
     if (!wifiConnected) {
         if (millis() - lastWifiAttemptMs_ >= kReconnectIntervalMs) {
             lastWifiAttemptMs_ = millis();
+            Serial.printf("WiFi connecting: ssid=%s\n", kWifiSsid);
             WiFi.disconnect();
             WiFi.begin(kWifiSsid, kWifiPassword);
         }
@@ -149,6 +153,7 @@ void MqttClient::updateConnections() {
         restartRequested_ = false;
         subscriptionId_ = -1;
         portEXIT_CRITICAL(&stateMutex_);
+        Serial.println("MQTT connecting");
         clientStarted_ = esp_mqtt_client_start(client_) == ESP_OK;
         if (!clientStarted_) {
             handleDisconnect();
@@ -190,6 +195,7 @@ void MqttClient::handleConnect() {
     if (!expected) {
         return;
     }
+    Serial.println("MQTT connected; subscribing to LED commands");
     // SDK callbacks run serially, so SUBACK cannot overtake this assignment.
     const int packetId = esp_mqtt_client_subscribe(client_, kCommandTopic, 1);
     portENTER_CRITICAL(&stateMutex_);
@@ -207,20 +213,30 @@ void MqttClient::handleDisconnect() {
     subscriptionId_ = -1;
     restartRequested_ = true;
     portEXIT_CRITICAL(&stateMutex_);
+    Serial.println("MQTT event: disconnected or connection error");
 }
 
 void MqttClient::handleSubscribe(const esp_mqtt_event_t& event) {
+    bool accepted = false;
+    bool rejected = false;
     portENTER_CRITICAL(&stateMutex_);
     if (state_ == State::Subscribing && event.msg_id == subscriptionId_ &&
         !restartRequested_) {
         // One requested topic must have exactly one granted QoS byte.
         if (event.data != nullptr && event.data_len == 1 && event.data[0] == 1) {
             state_ = State::Ready;
+            accepted = true;
         } else {
             restartRequested_ = true;
+            rejected = true;
         }
     }
     portEXIT_CRITICAL(&stateMutex_);
+    if (accepted) {
+        Serial.println("MQTT subscription ready");
+    } else if (rejected) {
+        Serial.println("MQTT subscription rejected");
+    }
 }
 
 void MqttClient::handleMessage(const esp_mqtt_event_t& event) {
@@ -348,6 +364,7 @@ void MqttClient::processPendingCommands() {
         char color[kColorSize];
         bool enabled = false;
         if (!parseCommand(command, color, enabled)) {
+            Serial.println("MQTT command rejected: invalid JSON or LED state");
             countDiscard();
             continue;
         }
@@ -357,7 +374,11 @@ void MqttClient::processPendingCommands() {
         portEXIT_CRITICAL(&stateMutex_);
         if (!current || millis() - command.receivedMs > kCommandMaxAgeMs ||
             !applyLed_(color, enabled)) {
+            Serial.println("MQTT command discarded: stale, disconnected, or unsupported");
             countDiscard();
+        } else {
+            Serial.printf("MQTT command applied: %s=%s\n",
+                          color, enabled ? "on" : "off");
         }
     }
 }
@@ -382,7 +403,10 @@ void MqttClient::publishReading() {
     }
     // QoS 0 sends once and never adds a sample to the SDK retransmission outbox.
     if (esp_mqtt_client_publish(client_, kDistanceTopic, payload, length, 0, false) < 0) {
+        Serial.println("MQTT distance publish failed");
         countDiscard();
+    } else {
+        Serial.printf("MQTT distance published: %s\n", payload);
     }
 }
 

@@ -33,6 +33,7 @@ void DistanceSensor::begin() {
 
 void DistanceSensor::update() {
     bool completed = false;
+    bool timedOut = false;
     uint32_t durationUs = 0;
 
     portENTER_CRITICAL(&captureMutex_);
@@ -43,8 +44,13 @@ void DistanceSensor::update() {
     } else if (captureActive_ &&
                static_cast<uint32_t>(micros() - triggerTimeUs_) >= kEchoTimeoutUs) {
         captureActive_ = false;
+        timedOut = true;
     }
     portEXIT_CRITICAL(&captureMutex_);
+
+    if (timedOut) {
+        Serial.println("Distance measurement timeout");
+    }
 
     if (completed) {
         const float distanceCm = durationUs * kSoundSpeedCmPerUs / kRoundTripDivisor;
@@ -52,6 +58,9 @@ void DistanceSensor::update() {
             distanceCm >= kMinDistanceCm && distanceCm <= kMaxDistanceCm) {
             distanceCm_ = distanceCm;
             readingAvailable_ = true;
+            Serial.printf("Distance measurement valid: %.1f cm\n", distanceCm);
+        } else {
+            Serial.printf("Distance measurement rejected: %.1f cm\n", distanceCm);
         }
     }
 

@@ -30,6 +30,13 @@ La ISR solo registra tiempos y banderas. Una sección crítica breve protege eso
 
 `main.cpp` crea los tres objetos y los adaptadores. `setup()` inicia Serial, LEDs, sensor y MQTT, en ese orden. `loop()` solo llama a `distanceSensor.update()` y `mqttClient.update()`, sin esperas de red.
 
+El monitor serial funciona como diagnóstico del estado del objeto inteligente a
+115200 baudios. Al arrancar informa la inicialización, el controlador de LEDs y
+la configuración de MQTT. Durante la operación muestra los cambios de estado de
+WiFi y MQTT, el resultado de la suscripción, cada lectura válida o timeout del
+HC-SR04, los comandos de LED aplicados o rechazados y el resultado de cada
+publicación de distancia. No imprime contraseñas ni payloads de comandos.
+
 ## Conectividad y concurrencia
 
 ESP-MQTT dispone de una tarea interna, pero sus métodos públicos de publicación y suscripción pueden esperar por red o por un mutex, según la [documentación de Espressif](https://docs.espressif.com/projects/esp-idf/en/v4.4.7/esp32/api-reference/protocols/mqtt.html). Por eso `MqttClient` añade una única tarea con pila estática para WiFi, supervisión de conexión y publicación. Esta adaptación al cambio de biblioteca mantiene disponible el bucle del sensor. La tarea duerme 20 ms entre revisiones; esa espera no ocurre en `loop()`.
